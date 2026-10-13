@@ -11,6 +11,10 @@ import authRoutes from './routes/auth.js';
 import syncRoutes from './routes/sync.js';
 import accountRoutes from './routes/account.js';
 import dashboardRoutes from './routes/dashboard.js';
+import userRoutes from './routes/users.js';
+import challengeRoutes from './routes/challenges.js';
+import matchRoutes from './routes/matches.js';
+import adminRoutes from './routes/admin.js';
 
 export function createApp({ staticDir = config.staticDir } = {}) {
   const app = express();
@@ -51,6 +55,10 @@ export function createApp({ staticDir = config.staticDir } = {}) {
   app.use('/api/sync', syncRoutes);
   app.use('/api/account', accountRoutes);
   app.use('/api/dashboard', dashboardRoutes);
+  app.use('/api/users', userRoutes);
+  app.use('/api/challenges', challengeRoutes);
+  app.use('/api/matches', matchRoutes);
+  app.use('/api/admin', adminRoutes);
   app.use('/api', (req, res) => res.status(404).json({ error: 'not_found', message: 'No such API route.' }));
 
   // The built React app (npm run build in the project root), so one server hosts everything.

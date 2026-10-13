@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { DrillSession, Game, LineProgress, PuzzleAttempt, User, UserState } from '../models/index.js';
+import { Challenge, DrillSession, Follow, Game, LineProgress, PuzzleAttempt, User, UserState } from '../models/index.js';
+import { disconnectUser, live } from '../live/socket.js';
 import { clearSession, requireUser } from '../middleware/auth.js';
 import { HttpError, route, validate } from '../middleware/http.js';
 import { passwordLimiter } from './auth.js';
@@ -82,7 +83,14 @@ router.delete(
     if (!(await bcrypt.compare(req.body.password, req.user.passwordHash))) throw new HttpError(401, 'bad_credentials', 'That password is incorrect.');
     const userId = req.user._id;
     await Promise.all([UserState, LineProgress, ...Object.values(HISTORY)].map((m) => m.deleteMany({ userId })));
+    // Online play: games in progress are resigned (the opponent keeps the finished game in their history).
+    for (const id of live?.activeFor(userId) ?? []) await live.resign(id, String(userId));
+    await Promise.all([
+      Follow.deleteMany({ $or: [{ follower: userId }, { followee: userId }] }),
+      Challenge.deleteMany({ $or: [{ from: userId }, { to: userId }] }),
+    ]);
     await User.deleteOne({ _id: userId });
+    disconnectUser(String(userId));
     clearSession(res);
     res.json({ ok: true });
   }),

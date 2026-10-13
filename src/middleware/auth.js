@@ -32,10 +32,9 @@ export function clearSession(res) {
   res.clearCookie(COOKIE, opts);
 }
 
-async function userFromRequest(req) {
-  const header = req.get('authorization');
-  const candidates = [req.cookies?.[COOKIE], header?.startsWith('Bearer ') ? header.slice(7) : null].filter(Boolean);
-  for (const token of candidates) {
+/** The account a session token belongs to, or null (bad, expired or revoked token). */
+export async function userFromTokens(candidates) {
+  for (const token of candidates.filter(Boolean)) {
     let payload;
     try {
       payload = jwt.verify(token, config.jwtSecret);
@@ -48,10 +47,23 @@ async function userFromRequest(req) {
   return null;
 }
 
+async function userFromRequest(req) {
+  const header = req.get('authorization');
+  return userFromTokens([req.cookies?.[COOKIE], header?.startsWith('Bearer ') ? header.slice(7) : null]);
+}
+
+const suspendedError = (user) =>
+  new HttpError(
+    403,
+    'suspended',
+    `This account has been suspended${user.suspendedReason ? `: ${user.suspendedReason}` : '.'} Contact the site owner if you think this is a mistake.`,
+  );
+
 /** Attaches req.user when the request carries a valid session; never rejects. */
 export async function optionalUser(req, res, next) {
   try {
-    req.user = await userFromRequest(req);
+    const user = await userFromRequest(req);
+    req.user = user && !user.suspended ? user : null;
     next();
   } catch (e) {
     next(e);
@@ -63,9 +75,24 @@ export async function requireUser(req, res, next) {
   try {
     const user = await userFromRequest(req);
     if (!user) throw new HttpError(401, 'signed_out', 'Please sign in again.');
+    if (user.suspended) throw suspendedError(user);
     req.user = user;
     next();
   } catch (e) {
     next(e);
   }
 }
+
+/** Signed in and has picked a username: needed for anything other players can see. */
+export function requireUsername(req, res, next) {
+  if (!req.user?.username) return next(new HttpError(409, 'username_required', 'Pick a username first.'));
+  next();
+}
+
+/** Admin pages and actions. Runs after requireUser. */
+export function requireAdmin(req, res, next) {
+  if (req.user?.role !== 'admin') return next(new HttpError(403, 'forbidden', 'Admins only.'));
+  next();
+}
+
+export { suspendedError };
