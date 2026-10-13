@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
-import { isSyncedKey, mergeValue } from '../../../shared/sync-rules.js';
+import { isSyncedKey, mergeValue } from '../sync-rules.js';
 import { DrillSession, Game, LineProgress, PuzzleAttempt, UserState } from '../models/index.js';
 import { requireUser } from '../middleware/auth.js';
 import { HttpError, route, validate } from '../middleware/http.js';
@@ -12,7 +12,7 @@ import { HttpError, route, validate } from '../middleware/http.js';
  *   out: { serverTime, items: [...merged values to apply], events: { accepted, rejected } }
  *
  * `items` are the device's changed saved values; the server merges each with its own copy
- * (shared/sync-rules.js) and returns the result, plus whatever other devices changed since `since`.
+ * (src/sync-rules.js, a copy of the app's shared/sync-rules.js) and returns the result, plus whatever other devices changed since `since`.
  * `events` are history records (puzzle attempts, games, drill sessions), stored once each.
  */
 

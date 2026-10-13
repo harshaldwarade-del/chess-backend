@@ -5,11 +5,11 @@
   "type": "module",
   "description": "Accounts and progress sync for Rank & File (Express + MongoDB)",
   "engines": {
-    "node": ">=20.6"
+    "node": ">=20.12"
   },
   "scripts": {
-    "dev": "node --watch --env-file-if-exists=.env src/index.js",
-    "start": "node --env-file-if-exists=.env src/index.js",
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
     "test": "node --test --test-concurrency=1 test/*.test.js"
   },
   "dependencies": {

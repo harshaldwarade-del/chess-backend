@@ -2,6 +2,13 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
+// A .env file next to package.json is read when present (local development). On a host such as
+// Render, set the variables in its dashboard instead.
+try {
+  process.loadEnvFile();
+} catch {
+  /* no .env file */
+}
 const env = process.env;
 const production = env.NODE_ENV === 'production';
 
