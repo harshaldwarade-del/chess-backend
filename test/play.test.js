@@ -259,10 +259,10 @@ describe('challenges and live games', () => {
 
 describe('admin', () => {
   test('bootstrap from the environment, admin-only API, suspend and unsuspend', async () => {
-    await ensureAdmin({ ADMIN_EMAIL: 'boss@example.com', ADMIN_PASSWORD: 'H@rshal123' });
-    await ensureAdmin({ ADMIN_EMAIL: 'boss@example.com', ADMIN_PASSWORD: 'H@rshal123' }); // second start: no change, no error
+    await ensureAdmin({ ADMIN_EMAIL: 'boss@example.com', ADMIN_PASSWORD: 'test-admin-pass-123' });
+    await ensureAdmin({ ADMIN_EMAIL: 'boss@example.com', ADMIN_PASSWORD: 'test-admin-pass-123' }); // second start: no change, no error
     const admin = request.agent(app);
-    const login = await admin.post('/api/auth/login').send({ email: 'boss@example.com', password: 'H@rshal123' });
+    const login = await admin.post('/api/auth/login').send({ email: 'boss@example.com', password: 'test-admin-pass-123' });
     assert.equal(login.status, 200);
     assert.equal(login.body.user.role, 'admin');
 
