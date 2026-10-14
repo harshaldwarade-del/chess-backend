@@ -106,7 +106,10 @@ describe('usernames and profiles', () => {
     assert.equal(prof.body.profile.iFollow, true);
     assert.equal(prof.body.profile.visible, true);
     assert.ok('record' in prof.body.profile);
-    assert.deepEqual((await a.agent.get('/api/users/me/follows')).body.following.map((x) => x.username), ['bob']);
+    assert.deepEqual(
+      (await a.agent.get('/api/users/me/follows')).body.following.map((x) => x.username),
+      ['bob'],
+    );
 
     await b.agent.patch('/api/auth/me').send({ profilePublic: false });
     const hidden = await a.agent.get('/api/users/bob');
@@ -254,6 +257,74 @@ describe('challenges and live games', () => {
     assert.match((await emit(guest, 'match:resign', { id })).error, /Sign in/);
     const st = await request(app).get(`/api/matches/${id}`);
     assert.equal(st.body.match.status, 'started');
+  });
+});
+
+describe('watching other players', () => {
+  test('live list, watcher counts, playing now, private players, and game history', async () => {
+    const a = await player('nora');
+    const b = await player('omar');
+    const c = await player('pia');
+    const d = await player('quin');
+    const e = await player('rosa');
+    await c.agent.post('/api/users/nora/follow').send({});
+    const id = await startGame(a, b, { clock: { initial: 300, increment: 0 } });
+    const [sa, sb, sc] = await Promise.all([socketFor(a), socketFor(b), socketFor(c)]);
+    await emit(sa, 'match:watch', { id });
+    await emit(sb, 'match:watch', { id });
+
+    // listed for everyone (guests too), followed games first for a follower
+    const listed = await c.agent.get('/api/matches/live');
+    const game = listed.body.games.find((g) => g.id === id);
+    assert.ok(game, 'the game is listed');
+    assert.equal(game.followed, true, 'pia follows nora');
+    assert.equal(game.white.username, 'nora');
+    assert.match(game.fen, /^rnbqkbnr\/pppppppp/);
+    assert.ok(
+      (await request(app).get('/api/matches/live')).body.games.some((g) => g.id === id),
+      'guests can see the list',
+    );
+
+    // a spectator joins: the players hear the new count; the spectator is counted once
+    const heard = new Promise((r) => sa.on('match:watchers', (w) => w.id === id && w.count === 1 && r(w)));
+    const w = await emit(sc, 'match:watch', { id });
+    assert.equal(w.state.watchers, 1);
+    await heard;
+    assert.equal((await emit(sc, 'match:move', { id, uci: 'e2e4', ply: 0 })).error, 'You’re not playing in this game.');
+
+    // profile and player cards say who is playing now
+    const prof = await c.agent.get('/api/users/nora');
+    assert.deepEqual(
+      prof.body.profile.playingNow.map((g) => g.id),
+      [id],
+    );
+    const follows = await c.agent.get('/api/users/me/follows');
+    assert.equal(follows.body.following[0].playing, id);
+
+    // a private player's game isn't listed (but the link still works)
+    const pid = await startGame(d, e);
+    await d.agent.patch('/api/auth/me').send({ profilePublic: false });
+    const after = await c.agent.get('/api/matches/live');
+    assert.ok(!after.body.games.some((g) => g.id === pid), 'hidden');
+    assert.equal((await c.agent.get(`/api/matches/${pid}`)).status, 200, 'link still works');
+    assert.equal((await c.agent.get('/api/users/quin')).body.profile.playingNow, undefined);
+    assert.equal((await c.agent.get('/api/users/quin/games')).status, 403);
+
+    // finish the watched game, then look it up in nora's history with filters
+    const end = nextState(sc, (st) => st.status === 'finished');
+    await play([sa, sb], id, ['f2f3', 'e7e5', 'g2g4', 'd8h4']);
+    await end;
+    const hist = await c.agent.get('/api/users/nora/games');
+    assert.equal(hist.body.total, 1);
+    assert.equal(hist.body.games[0].id, id);
+    assert.equal(hist.body.games[0].outcome, 'loss');
+    assert.equal(hist.body.games[0].white.username, 'nora');
+    assert.match(hist.body.games[0].fen, /q/);
+    assert.equal((await c.agent.get('/api/users/nora/games?result=loss')).body.total, 1);
+    assert.equal((await c.agent.get('/api/users/nora/games?result=win')).body.total, 0);
+    assert.equal((await c.agent.get('/api/users/omar/games?result=win&speed=blitz')).body.total, 1);
+    assert.equal((await c.agent.get('/api/users/omar/games?speed=bullet')).body.total, 0);
+    assert.ok(!(await c.agent.get('/api/matches/live')).body.games.some((g) => g.id === id), 'no longer live');
   });
 });
 

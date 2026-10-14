@@ -46,7 +46,14 @@ export async function attachSockets(httpServer) {
     broadcast: (id, state) => io.to(`match:${id}`).emit('match:state', state),
     notifyUser,
     isOnline,
+    viewers: (id) =>
+      [...(io.sockets.adapter.rooms.get(`match:${id}`) ?? [])].map((sid) => {
+        const u = io.sockets.sockets.get(sid)?.data.user;
+        return u ? String(u._id) : null;
+      }),
   });
+  // Everyone in a game's room hears how many people are watching when that changes.
+  const announceWatchers = (id) => live.games.has(id) && io.to(`match:${id}`).emit('match:watchers', { id, count: live.watcherCount(id) });
   const restored = await live.restore();
   if (restored) console.log(`[live] picked up ${restored} game(s) in progress`);
 
@@ -93,13 +100,30 @@ export async function attachSockets(httpServer) {
 
     socket.on('match:watch', async ({ id } = {}, ack) => {
       if (!allowed() || typeof id !== 'string' || !/^[a-f0-9]{24}$/.test(id)) return reply(ack, { error: 'No such game.' });
-      for (const room of socket.rooms) if (room.startsWith('match:')) socket.leave(room);
-      const state = await live.state(id);
-      if (!state) return reply(ack, { error: 'No such game.' });
+      for (const room of socket.rooms)
+        if (room.startsWith('match:') && room !== `match:${id}`) {
+          socket.leave(room);
+          announceWatchers(room.slice(6));
+        }
       socket.join(`match:${id}`);
+      const state = await live.state(id);
+      if (!state) {
+        socket.leave(`match:${id}`);
+        return reply(ack, { error: 'No such game.' });
+      }
       reply(ack, { ok: true, state });
+      announceWatchers(id);
     });
-    socket.on('match:unwatch', ({ id } = {}) => socket.leave(`match:${id}`));
+    socket.on('match:unwatch', ({ id } = {}) => {
+      if (typeof id !== 'string' || !socket.rooms.has(`match:${id}`)) return;
+      socket.leave(`match:${id}`);
+      announceWatchers(id);
+    });
+    // a closed tab stops watching
+    socket.on('disconnecting', () => {
+      const rooms = [...socket.rooms].filter((r) => r.startsWith('match:'));
+      if (rooms.length) setImmediate(() => rooms.forEach((r) => announceWatchers(r.slice(6))));
+    });
     socket.on(
       'match:move',
       act(({ id, uci, ply }) => (typeof uci === 'string' && /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(uci) ? live.move(id, uid, uci, ply) : { error: 'Bad move.' })),

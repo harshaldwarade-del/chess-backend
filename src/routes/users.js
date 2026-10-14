@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { Follow, Match, PuzzleAttempt, LineProgress, User, UserState, publicRatings } from '../models/index.js';
 import { requireUser, requireUsername } from '../middleware/auth.js';
 import { HttpError, route } from '../middleware/http.js';
-import { isOnline } from '../live/socket.js';
+import { Chess } from 'chess.js';
+import { isOnline, live } from '../live/socket.js';
 import { matchSummary } from './dashboard.js';
 
 /*
@@ -23,8 +24,26 @@ export function playerCard(u) {
     ratings: publicRatings(u.ratings),
     online: isOnline(String(u._id)),
     lastSeenAt: u.lastSeenAt ?? null,
+    // the game they're playing right now, if their profile is public (so others can watch)
+    playing: u.profilePublic === false ? null : (live?.activeFor(u._id).at(-1) ?? null),
   };
 }
+
+/** The final position of a game, for the little board in game lists. */
+function finalFen(moves) {
+  const c = new Chess();
+  for (const uci of moves ?? []) {
+    try {
+      c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+    } catch {
+      break;
+    }
+  }
+  return c.fen();
+}
+
+const SPEEDS = ['bullet', 'blitz', 'rapid', 'classical'];
+const PAGE = 20;
 
 const findByUsername = async (name) => {
   const u = await User.findOne({ usernameKey: String(name).toLowerCase() });
@@ -40,7 +59,7 @@ router.get(
       .toLowerCase()
       .slice(0, 20);
     const filter = { usernameKey: q ? { $regex: `^${escapeRe(q)}` } : { $type: 'string' }, suspended: { $ne: true } };
-    const users = await User.find(filter, { username: 1, ratings: 1, lastSeenAt: 1 })
+    const users = await User.find(filter, { username: 1, ratings: 1, lastSeenAt: 1, profilePublic: 1 })
       .sort(q ? { usernameKey: 1 } : { lastSeenAt: -1 })
       .limit(30)
       .lean();
@@ -53,8 +72,8 @@ router.get(
   '/me/follows',
   route(async (req, res) => {
     const [following, followers] = await Promise.all([
-      Follow.find({ follower: req.user._id }).populate('followee', 'username ratings lastSeenAt suspended').lean(),
-      Follow.find({ followee: req.user._id }).populate('follower', 'username ratings lastSeenAt suspended').lean(),
+      Follow.find({ follower: req.user._id }).populate('followee', 'username ratings lastSeenAt suspended profilePublic').lean(),
+      Follow.find({ followee: req.user._id }).populate('follower', 'username ratings lastSeenAt suspended profilePublic').lean(),
     ]);
     const cards = (list, field) =>
       list
@@ -112,6 +131,12 @@ router.get(
         record[w == null ? 'draw' : w === color ? 'win' : 'loss'] += 1;
       }
       Object.assign(profile, {
+        playingNow: live
+          ? live
+              .activeFor(u._id)
+              .map((id) => live.summary(id))
+              .filter(Boolean)
+          : [],
         puzzleRating,
         puzzles: { solved, attempts },
         linesMastered: mastered,
@@ -124,6 +149,58 @@ router.get(
       });
     }
     res.json({ profile });
+  }),
+);
+
+/**
+ * A player's finished games, newest first, 20 a page: ?page=1&speed=blitz&result=win|loss|draw&rated=true|false
+ * Only for public profiles (and your own).
+ */
+router.get(
+  '/:username/games',
+  route(async (req, res) => {
+    const u = await findByUsername(req.params.username);
+    const self = String(u._id) === String(req.user._id);
+    if (!self && u.profilePublic === false && req.user.role !== 'admin') throw new HttpError(403, 'private', `${u.username} keeps their games private.`);
+    const page = Math.max(1, Math.min(500, Number.parseInt(req.query.page, 10) || 1));
+    const me = { $or: [{ 'white.user': u._id }, { 'black.user': u._id }] };
+    const and = [me, { status: 'finished' }];
+    if (SPEEDS.includes(req.query.speed)) and.push({ speed: req.query.speed });
+    if (req.query.rated === 'true' || req.query.rated === 'false') and.push({ rated: req.query.rated === 'true' });
+    const result = req.query.result;
+    if (result === 'draw') and.push({ 'result.winner': null });
+    else if (result === 'win')
+      and.push({
+        $or: [
+          { 'white.user': u._id, 'result.winner': 'w' },
+          { 'black.user': u._id, 'result.winner': 'b' },
+        ],
+      });
+    else if (result === 'loss')
+      and.push({
+        $or: [
+          { 'white.user': u._id, 'result.winner': 'b' },
+          { 'black.user': u._id, 'result.winner': 'w' },
+        ],
+      });
+    const filter = { $and: and };
+    const [total, docs] = await Promise.all([
+      Match.countDocuments(filter),
+      Match.find(filter)
+        .sort({ endedAt: -1, _id: -1 })
+        .skip((page - 1) * PAGE)
+        .limit(PAGE)
+        .lean(),
+    ]);
+    const games = docs.map((m) => {
+      const s = matchSummary(m, u._id);
+      s.fen = finalFen(m.moves);
+      s.white = { username: m.white.username, rating: m.white.rating };
+      s.black = { username: m.black.username, rating: m.black.rating };
+      delete s.moves;
+      return s;
+    });
+    res.json({ games, total, page, pages: Math.max(1, Math.ceil(total / PAGE)) });
   }),
 );
 

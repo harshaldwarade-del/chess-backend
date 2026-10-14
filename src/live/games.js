@@ -44,11 +44,13 @@ export class LiveGames {
    *   broadcast(matchId, state): send the new state to everyone watching the game
    *   notifyUser(userId, event, payload): send a personal event (e.g. a rematch started)
    *   isOnline(userId): whether the player has the app open
+   *   viewers(matchId): user ids (null for guests) of everyone with the game open, players included
    */
-  constructor({ broadcast = () => {}, notifyUser = () => {}, isOnline = () => false } = {}) {
+  constructor({ broadcast = () => {}, notifyUser = () => {}, isOnline = () => false, viewers = () => [] } = {}) {
     this.broadcast = broadcast;
     this.notifyUser = notifyUser;
     this.isOnline = isOnline;
+    this.viewers = viewers;
     this.games = new Map();
   }
 
@@ -164,9 +166,47 @@ export class LiveGames {
       claimAfter: CLAIM_AFTER_MS,
       createdAt: g.doc.createdAt,
       endedAt: g.doc.endedAt ?? null,
+      watchers: this.watcherCount(g.id, g.doc),
     };
     if (transient) this.games.delete(g.id);
     return s;
+  }
+
+  /** How many people other than the two players are watching (each signed-in person once; guests each). */
+  watcherCount(id, doc = this.games.get(String(id))?.doc) {
+    if (!doc) return 0;
+    const players = new Set([String(doc.white.user), String(doc.black.user)]);
+    const seen = new Set();
+    let guests = 0;
+    for (const uid of this.viewers(String(id))) {
+      if (uid == null) guests += 1;
+      else if (!players.has(uid)) seen.add(uid);
+    }
+    return seen.size + guests;
+  }
+
+  /** A short card for lists of games being played now: players, clock, position and watchers. */
+  summary(id) {
+    const g = this.games.get(String(id));
+    if (!g || g.doc.status !== 'started') return null;
+    const s = this.#snapshot(g);
+    return {
+      id: s.id,
+      white: { id: s.white.id, username: s.white.username, rating: s.white.rating, provisional: s.white.provisional },
+      black: { id: s.black.id, username: s.black.username, rating: s.black.rating, provisional: s.black.provisional },
+      clock: s.clock,
+      speed: s.speed,
+      rated: s.rated,
+      plies: s.moves.length,
+      lastMove: s.moves.at(-1) ?? null,
+      fen: g.chess.fen(),
+      turn: s.turn,
+      clocks: s.clocks,
+      running: s.running,
+      serverNow: s.serverNow,
+      createdAt: s.createdAt,
+      watchers: s.watchers,
+    };
   }
 
   /** Games `userId` is playing right now. */
@@ -179,6 +219,11 @@ export class LiveGames {
 
   allActive() {
     return [...this.games.values()].filter((g) => g.doc.status === 'started').map((g) => this.#snapshot(g));
+  }
+
+  /** Cards for every game being played right now. */
+  liveSummaries() {
+    return [...this.games.values()].filter((g) => g.doc.status === 'started').map((g) => this.summary(g.id));
   }
 
   /* ---------- actions (each runs in order, one at a time per game) ---------- */
